@@ -1,0 +1,169 @@
+# ==============================================================================
+# OPERATOR & ENGINEER USER MANUAL
+# System: NISQA v2.0 + 1D Dilated CNN Hybrid Audio QA Pipeline (Up to 48 kHz)
+# Version: 2.0 Production Release (100% Offline)
+# ==============================================================================
+
+TABLE OF CONTENTS
+-----------------
+1. System Overview & How the Two-Stage Hybrid Gate Works
+2. Launching & Using the Offline Desktop GUI (`gui_app.py`)
+3. Understanding Stage 1 (OK vs. NG Segregation) & Stage 2 (Defect Sub-Class)
+4. Interpreting the Excel QA Report (`Audio_QA_Hybrid_Report.xlsx`)
+5. Training or Re-Calibrating Models (`train_hybrid.py`)
+6. Adjusting Gatekeeper Thresholds for Factory Sensitivity
+7. Troubleshooting Common Issues
+
+
+================================================================================
+1. SYSTEM OVERVIEW & HOW THE TWO-STAGE HYBRID GATE WORKS
+================================================================================
+This system automatically inspects captured mono audio recordings (up to 48 kHz,
+.wav / .flac / .mp3) without needing a "golden reference" recording (Non-Intrusive).
+
+Why Two Engines Are Used Together:
+- Path A: NISQA v2.0 (Native 48 kHz Perceptual Model)
+  Evaluates the raw audio across 5 human perceptual dimensions on a 1.0 to 5.0 scale:
+  * mos_pred  : Overall Audio Quality
+  * noi_pred  : Noisiness (catches high-frequency static hiss, hum, EMI noise)
+  * dis_pred  : Discontinuity (catches frame dropouts, clipping, splices)
+  * col_pred  : Coloration (catches frequency warping, phase distortion, wobble)
+  * loud_pred : Loudness consistency
+
+- Path B: 63-Feature Physics Stack + 1D Temporal Dilated CNN + Attention Layer
+  Extracts 63 acoustic & physical features per 25ms hop, passes them through
+  exponentially dilated 1D convolutions (dilation rates 1, 2, 4, 8) and a Temporal
+  Attention Layer, and computes an Acoustic Self-Similarity score.
+  * Catches clean phrase/word repetitions (NG_Rep, e.g. "Turning on... Turning on")
+    that sound acoustically clean to NISQA.
+  * Pinpoints the exact defect timestamp (in seconds) at 25ms resolution.
+
+
+================================================================================
+2. LAUNCHING & USING THE OFFLINE DESKTOP GUI (`gui_app.py`)
+================================================================================
+Step 1: Activate your offline Python environment and run:
+        python gui_app.py
+
+Step 2: Configure Model Paths (Top Panel)
+        - By default, the GUI loads weights from `./weights/`:
+          * `weights/nisqa.tar`
+          * `weights/audio_classifier_model.keras`
+          * `weights/scaler.pkl`
+          * `weights/meta_gate_xgb.pkl` (optional when using Rule-Consensus mode)
+
+Step 3: Choose Sample Rate Mode
+        - "44.1 kHz Baseline (soxr_vhq Zero-Retrain Fix)":
+          Use this immediately with your existing 44.1 kHz trained CNN weights.
+          It uses ultra-high-precision `soxr_vhq` sinc resampling so 48 kHz files
+          never suffer artificial pitch wobbles, while feeding native 48 kHz audio
+          into NISQA.
+        - "48 kHz Native Fullband":
+          Use this after running `train_hybrid.py --sr 48000` (FRAME_LEN=2400,
+          HOP_LEN=1200, n_fft=2400) for zero resampling across both paths.
+
+Step 4: Select Stage 1 Gatekeeper Mode
+        - "Rule-Based Consensus Gate (Zero Retraining)":
+          Uses deterministic perceptual + temporal thresholds.
+        - "Trained XGBoost / Logistic Meta-Classifier Gate":
+          Uses the 10-feature fused vector `X_gate` trained on your dataset.
+
+Step 5: Run Single-File or Batch Folder Inspection
+        - Click "Select Audio Folder" or "Inspect Single File".
+        - Click "Run Hybrid QA Pipeline".
+        - View real-time OK / NG segregation, NISQA 5-dimension scores, 1D CNN
+          probabilities, and the exact defect timestamp (s) in the results table.
+        - Click "Export Excel Report (.xlsx)" to save the color-coded QA sheet.
+
+
+================================================================================
+3. UNDERSTANDING STAGE 1 (OK vs. NG) & STAGE 2 (DEFECT SUB-CLASSIFICATION)
+================================================================================
+STAGE 1: ROBUST BINARY GATEKEEPER (OK vs. NG)
+---------------------------------------------
+Instead of a single `OK_THRESHOLD = 0.35` on the CNN (which previously allowed
+~23% of subtle NG_Wobble and NG_Rep files to leak into OK), Stage 1 fuses all
+10 features:
+   X_gate = [MOS, NOI, DIS, COL, LOUD, P_OK, P_Cut, P_Noise, P_Rep, P_Wobble]
+
+In Rule-Based Consensus Mode, a file is marked **OK** if and only if BOTH pass:
+1. NISQA Perceptual Check:
+   mos_pred >= 3.6  AND  noi_pred >= 3.5  AND  dis_pred >= 3.5  AND  col_pred >= 3.5
+2. 1D CNN Temporal & Defect Check:
+   P_OK >= 0.35  AND  max(P_Rep, P_Cut, P_Noise) < 0.55
+
+If EITHER check fails, the file is immediately flagged as **NG** and routed to Stage 2.
+
+STAGE 2: DEFECT SUB-CLASSIFIER (FOR NG FILES ONLY)
+--------------------------------------------------
+Once Stage 1 confirms a file is NG, Stage 2 zeroes out `P_OK` and combines the
+1D CNN defect probabilities with NISQA's specific perceptual deficit:
+- NG_Noise  : High CNN `P_Noise`  + Low NISQA `noi_pred`
+- NG_Cut    : High CNN `P_Cut`    + Low NISQA `dis_pred`
+- NG_Wobble : High CNN `P_Wobble` + Low NISQA `col_pred`
+- NG_Rep    : High CNN `P_Rep`    + Acoustic Self-Similarity (catches clean TTS loops)
+
+
+================================================================================
+4. INTERPRETING THE EXCEL QA REPORT (`Audio_QA_Hybrid_Report.xlsx`)
+================================================================================
+The exported Excel workbook contains two sheets:
+1. `QA_Inspection_Results`:
+   - `Filename` & `Sample_Rate_Hz`
+   - `Stage1_Binary_Verdict` (`OK` in green, `NG` in red)
+   - `Stage2_Final_Class` (`OK`, `NG_Noise`, `NG_Cut`, `NG_Wobble`, `NG_Rep`)
+   - `Event_Timestamp_Sec` (Exact 25ms peak defect timestamp from AttentionLayer)
+   - `NISQA_MOS`, `NISQA_NOI`, `NISQA_DIS`, `NISQA_COL`, `NISQA_LOUD` (1.0 - 5.0)
+   - `CNN_P_OK`, `CNN_P_Cut`, `CNN_P_Noise`, `CNN_P_Rep`, `CNN_P_Wobble` (0.0 - 1.0)
+   - `Self_Similarity_Score` (0.0 - 1.0)
+   - `Gate_Veto_Reason` (Plain-English explanation of why an NG file failed)
+
+2. `Batch_Summary_Metrics`:
+   - Total files inspected, OK count & percentage, NG count & breakdown by defect class.
+
+
+================================================================================
+5. TRAINING OR RE-CALIBRATING MODELS (`train_hybrid.py`)
+================================================================================
+Place your labeled audio files into:
+  dataset/OK/
+  dataset/NG_Noise/
+  dataset/NG_Cut/
+  dataset/NG_Wobble/
+  dataset/NG_Rep/
+
+Command A: Train ONLY the Stage 1 XGBoost / Logistic Meta-Classifier (Fast, ~2 mins)
+  Uses your existing `audio_classifier_model.keras` + `nisqa.tar` to extract the
+  10-feature `X_gate` vectors and trains `weights/meta_gate_xgb.pkl`:
+  python train_hybrid.py --data_dir ./dataset --mode meta_only
+
+Command B: Full Native 48 kHz Training (1D Dilated CNN + Scaler + Meta-Gate)
+  Trains the 63-feature scaler, 1D Temporal Dilated CNN + Attention at native
+  SR=48000 (FRAME_LEN=2400, HOP_LEN=1200, n_fft=2400), and Stage 1 Meta-Gate:
+  python train_hybrid.py --data_dir ./dataset --sr 48000 --epochs 60 --mode full
+
+
+================================================================================
+6. ADJUSTING GATEKEEPER THRESHOLDS FOR FACTORY SENSITIVITY
+================================================================================
+- If too many borderline normal recordings are flagged as NG_Wobble:
+  Lower `col_min` from `3.50` to `3.35` in the GUI Thresholds bar.
+- If subtle background hiss must be rejected more aggressively:
+  Raise `noi_min` from `3.50` to `3.75`.
+- Zero False-OK Guarantee:
+  Keep `max_defect_cap` at `0.50 - 0.55` and `mos_min` >= `3.60`.
+
+
+================================================================================
+7. TROUBLESHOOTING COMMON ISSUES
+================================================================================
+Q: Previously, 44.1 kHz files sounded wobbly or got misclassified as NG_Wobble
+   when loaded at 48 kHz. Why?
+A: Standard resampling filters without high-quality sinc interpolation cause phase
+   warping, and feeding 48 kHz frames into a 44.1 kHz trained CNN shifts the
+   50ms window size (2205 vs 2400 samples). Our `inference.py` fixes this via
+   `librosa.load(..., sr=target_sr, res_type='soxr_vhq')` for the CNN path while
+   passing the native 48 kHz waveform untouched to NISQA.
+
+Q: Does the pipeline ever connect to the internet to download models?
+A: No. All network calls are disabled. Models are loaded strictly from `./weights/`.

@@ -1,0 +1,114 @@
+# ==============================================================================
+# PREREQUISITES & OFFLINE INSTALLATION GUIDELINE
+# Project: NISQA v2.0 + 1D Temporal Dilated CNN Hybrid Audio QA Pipeline (48 kHz)
+# Operation Mode: 100% Air-Gapped / Offline Production Ready
+# ==============================================================================
+
+1. HARDWARE & OPERATING SYSTEM REQUIREMENTS
+--------------------------------------------------------------------------------
+- OS: Windows 10/11 (64-bit), Ubuntu 20.04/22.04/24.04 LTS, or RHEL 8/9
+- CPU: 4+ Cores (Intel Core i7 / Xeon or AMD Ryzen 7 / EPYC with AVX2 support)
+- RAM: 16 GB minimum (32 GB recommended for large batch training)
+- GPU (Optional but Recommended): NVIDIA GPU with 6GB+ VRAM (CUDA 11.8 or 12.1)
+  Note: The entire inference & GUI pipeline runs smoothly on CPU-only machines
+  at ~0.18s per 4-second 48 kHz audio file.
+- Disk Space: 5 GB free space for Python environment, offline wheelhouse, and weights.
+
+
+2. PYTHON VERSION REQUIREMENT
+--------------------------------------------------------------------------------
+- Python 3.10.x or Python 3.11.x (64-bit)
+- Ensure `tkinter` is included during Python installation:
+  * Windows: Check "tcl/tk and IDLE" in the Python installer.
+  * Ubuntu/Debian: `sudo apt-get install python3-tk libsndfile1 ffmpeg`
+
+
+3. TWO-PHASE 100% OFFLINE WHEELHOUSE PREPARATION
+--------------------------------------------------------------------------------
+To deploy this system on a 100% offline factory or QA testbench PC without internet:
+
+PHASE A: On a Staging Machine WITH Internet Access
+--------------------------------------------------
+1. Create a local directory for offline packages:
+   mkdir -p offline_package/wheels
+   mkdir -p offline_package/weights
+
+2. Create `requirements.txt` with the exact pinned dependencies:
+   numpy==1.26.4
+   scipy==1.13.1
+   librosa==0.10.2.post1
+   soundfile==0.12.1
+   soxr==0.3.7
+   torch==2.3.1
+   torchaudio==2.3.1
+   tensorflow==2.16.2
+   scikit-learn==1.5.1
+   xgboost==2.1.0
+   pandas==2.2.2
+   openpyxl==3.1.5
+   pyyaml==6.0.1
+   joblib==1.4.2
+   tqdm==4.66.4
+   matplotlib==3.9.0
+
+3. Download all `.whl` binaries into `offline_package/wheels`:
+   pip download -r requirements.txt -d offline_package/wheels
+
+4. Download the NISQA v2.0 pretrained fullband checkpoint (`nisqa.tar`) from the
+   official MIT-licensed NISQA repository (https://github.com/gabrielmittag/NISQA/tree/master/weights)
+   and place `nisqa.tar` inside `offline_package/weights/nisqa.tar`.
+
+5. Copy the entire project folder + `offline_package/` to a USB drive or internal
+   network share to transfer to the offline QA machine.
+
+
+PHASE B: On the Target 100% Offline Production Machine (Zero Internet)
+----------------------------------------------------------------------
+1. Create and activate an isolated virtual environment:
+   # Windows:
+   python -m venv .venv
+   .venv\Scripts\activate
+
+   # Linux:
+   python3 -m venv .venv
+   source .venv/bin/activate
+
+2. Install all packages strictly from the local wheelhouse (`--no-index`):
+   pip install --no-index --find-links=offline_package/wheels -r requirements.txt
+
+3. Verify offline environment variables (automatically enforced in code):
+   export TF_CPP_MIN_LOG_LEVEL=2
+   export TORCH_HOME=./weights
+   export NUMBA_CACHE_DIR=./.numba_cache
+
+
+4. EXPECTED DIRECTORY STRUCTURE FOR OFFLINE EXECUTION
+--------------------------------------------------------------------------------
+hybrid_audio_qa_pipeline/
+├── train_hybrid.py                 # Full 48 kHz 1D CNN + Attention + Meta-Gate Trainer
+├── inference.py                    # Two-Stage Hybrid Gatekeeper CLI & Batch Engine
+├── gui_app.py                      # 100% Offline Desktop GUI (Tkinter / ttk)
+├── requirements.txt                # Pinned Python dependencies
+├── PREREQUISITES_INSTALLATION.txt  # This installation guide
+├── USER_MANUAL.txt                 # Step-by-step operator & engineer manual
+├── README.md                       # Complete architectural & setup documentation
+├── weights/
+│   ├── nisqa.tar                   # Pretrained NISQA v2.0 48kHz Fullband weights
+│   ├── audio_classifier_model.keras# Trained 1D Temporal Dilated CNN + Attention
+│   ├── scaler.pkl                  # Fitted 63-Feature StandardScaler
+│   └── meta_gate_xgb.pkl           # Stage 1 Binary Gatekeeper (XGBoost / Logistic)
+└── dataset/                        # For training / re-calibration
+    ├── OK/
+    ├── NG_Noise/
+    ├── NG_Cut/
+    ├── NG_Wobble/
+    └── NG_Rep/
+
+
+5. VERIFYING YOUR OFFLINE SETUP
+--------------------------------------------------------------------------------
+Run the built-in self-test (works even before placing custom dataset files):
+   python inference.py --self-test
+
+Launch the Offline Desktop GUI:
+   python gui_app.py

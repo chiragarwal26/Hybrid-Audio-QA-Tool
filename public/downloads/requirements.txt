@@ -1,0 +1,21 @@
+# ==============================================================================
+# Pinned Python Dependencies for 100% Offline Hybrid Audio QA Pipeline (48 kHz)
+# Download offline wheels: pip download -r requirements.txt -d offline_package/wheels
+# Install offline:         pip install --no-index --find-links=offline_package/wheels -r requirements.txt
+# ==============================================================================
+numpy==1.26.4
+scipy==1.13.1
+librosa==0.10.2.post1
+soundfile==0.12.1
+soxr==0.3.7
+torch==2.3.1
+torchaudio==2.3.1
+tensorflow==2.16.2
+scikit-learn==1.5.1
+xgboost==2.1.0
+pandas==2.2.2
+openpyxl==3.1.5
+pyyaml==6.0.1
+joblib==1.4.2
+tqdm==4.66.4
+matplotlib==3.9.0
